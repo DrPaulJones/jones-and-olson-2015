@@ -1,0 +1,228 @@
+*
+* BOOTVAR.RPF
+* RATS Version 8
+* Bootstrapping example for VAR
+*
+compute lags=3				;*Number of lags
+compute nvar=4				;*Number of variables
+compute nstep=13			;*Number of response steps
+compute ndraws=3000			;*Number of draws
+*
+
+
+cal(m) 1968 1 5
+all 2010:12
+open data
+data(format=xls,org=obs)
+tab
+set ip_us = 100*(log(UNITED_STATES) - log(UNITED_STATES{1}))
+set ip_jp = 100*(log(JAPAN) - log(JAPAN{1}))
+set ip_uk = 100*(log(united_kingdom) - log(united_kingdom{1}))
+set ip_sp = 100*(log(S_P_500) - log(S_P_500{1}))
+tab
+
+
+@varlagselect(lags=13,det=constant,crit=aic)
+# ip_us ip_jp ip_uk spread
+* AIC selects 3 lags, BIC selects 2
+
+garch(noprint,p=1,q=1,resids=resids1,hseries=ht,method=bfgs,iters=500) / ip_sp
+set std_resids1 = resids1(t)/sqrt(ht(t))
+cor(noprint,qstats,span=12,number=48) std_resids1
+set spvar = sqrt(ht)
+gra 1; # spvar
+
+*set uncert = uncertainty
+*set uncert = spvar
+set uncert = spread
+tab
+******************************************************************
+*
+* Set up the system
+*
+dec vect[series] udraws(nvar) resids(nvar) resample(nvar)
+dec vect[equation] eqsample(nvar) eqbase(nvar)
+*
+system(model=varmodel)
+variables uncert ip_us ip_jp ip_uk
+lags 1 to lags
+det constant
+end(system)
+*
+estimate(resids=resids,outsigma=s) 1970:01 *
+compute rstart=%regstart(),rend=%regend()
+dis rstart rend
+* Set up the parallel system for the resampled data
+*
+system(model=bootvar)
+variables resample
+lags 1 to lags
+det constant
+end(system)
+
+do i=1,nvar
+   set resample(i) = %modeldepvars(varmodel)(i){0}
+end do i
+print / resample
+declare vect[rect] %%responses(ndraws)
+declare rect[series] impulses(nvar,nvar)
+*
+infobox(action=define,progress,lower=1,upper=ndraws) "Bootstrap Simulations"
+do draw=1,ndraws
+   *
+   * Draw a bootstrapped sample
+   *
+   boot entries rstart rend
+   do i=1,nvar
+      set udraws(i) = resids(i)(entries(t))
+   end do i
+   forecast(paths,model=varmodel,from=rstart,to=rend,results=resample)
+   # udraws
+   *
+   * Estimate the model with resampled data
+   *
+   estimate(noprint,noftests) rstart rend
+   impulse(noprint,model=bootvar,results=impulses,steps=nstep)
+
+do i=1,4
+   do j=1,4
+      acc impulses(i,j) 1 13 impulses(i,j) 1
+   end do j
+end do i
+
+
+   *
+   * Store the impulse responses
+   *
+   dim %%responses(draw)(nvar*nvar,nstep)
+   ewise %%responses(draw)(i,j)=ix=%vec(%xt(impulses,j)),ix(i)
+   infobox(current=draw)
+end do draw
+infobox(action=remove)
+*
+@MCGraphIRF1(model=varmodel,page=byshock,stdev=2,SHOCKLABELS=||'U.S. Uncertainty Shock'||,percentages=||0.05,0.95||,varlabels=||'U.S. Uncertainty','U.S. Output','Japanese Output','U.K. Output'||)
+
+
+system(model=varmodel)
+variables uncert ip_us ip_jp ip_uk
+lags 1 2 3
+det constant
+end(system)
+estimate(resids=resids,nopri,ftests) /
+
+lin(define=eq1r) uncert /
+  # constant uncert{1 to 4} ip_us{1 to 4}
+set e1 = %resids
+lin(noprint,define=eq2r) ip_us /
+  # constant uncert{1 to 4} ip_us{1 to 4}
+set e2 = %resids
+lin(noprint,define=eq3r) ip_jp /
+  # constant uncert{1 to 4} ip_jp{1 to 4}
+set e3 = %resids
+lin(noprint,define=eq4r) ip_uk /
+  # constant uncert{1 to 4} ip_uk{1 to 4}
+set e4 = %resids
+
+group whoknows eq1r eq2r eq3r eq4r
+sur(model=whoknows,cvout=v)
+errors(impulses,model=whoknows) 4 24 v
+
+
+compute lags=11			   ;*Number of lags
+compute steps=16		   ;*Number of response steps
+compute nburn =5000		;*Burn-in draws
+compute ndraws=25000		;*Keeper draws
+*
+*
+compute nvar=%modelsize(whoknows)
+*
+* Do set up for Gibbs sampling on SUR model
+*
+@SURGibbsSetup whoknows
+**********************************************
+*
+* Do a SUR to get a set of estimates to initialize the Gibbs sampler.
+*
+sur(model=whoknows)
+compute ntotal=%nreg
+compute bdraw=%beta
+compute wishdof=%nobs
+*
+* For saving the IRF's
+*
+declare vect[rect] %%responses(ndraws)
+*
+infobox(action=define,progress,lower=-nburn,upper=ndraws) $
+    "Gibbs Sampling"
+do draw=-nburn,ndraws
+   *
+   * Compute covariance matrix of residuals at the current beta
+   *
+   compute covmat=SURGibbsSigma(bdraw)
+   *
+   * Do a draw for the precision matrix conditional on beta
+   *
+   compute hdraw=%ranwishartf(%decomp(inv(covmat)),wishdof)
+   *
+   * Compute the required information with the interaction between
+   * the precision matrix and the data
+   *
+   @SURGibbsDataInfo hdraw hdata hbdata
+   *
+   * Draw coefficients given the precision matrix hdraw
+   *
+   compute hpost=hdata
+   compute vpost=inv(hpost)
+   compute bpost=vpost*hbdata
+   compute bdraw=bpost+%ranmvnormal(%decomp(vpost))
+   infobox(current=draw)
+   if draw<=0
+      next
+   *
+   * Do the bookkeeping here.
+   *
+   compute %modelsetcoeffs(whoknows,bdraw)
+   impulse(noprint,model=whoknows,factor=%decomp(inv(hdraw)),results=impulses,steps=steps)
+
+do i=1,4
+   do j=1,4
+      acc impulses(i,j) 1 16 impulses(i,j) 1
+   end do j
+end do i
+
+*
+   * Store the impulse responses
+   *
+   dim %%responses(draw)(nvar*nvar,steps)
+   ewise %%responses(draw)(i,j)=ix=%vec(%xt(impulses,j)),ix(i)
+end do draw
+infobox(action=remove)
+@MCGraphIRF(model=whoknows,center=median,page=all)
+
+
+
+system(model=test)
+var uncertainty ip_us ip_jp ip_uk
+lags 1 to 3
+det constant
+end(system)
+estimate(noprint,residuals=resids2)
+ERRORS(IMPULSES,STEPS=24,MODEL=test) 4
+corr(qstats,span=12,number=48) resids2(1)
+corr(qstats,span=12,number=48) resids2(2)
+corr(qstats,span=12,number=48) resids2(3)
+corr(qstats,span=12,number=48) resids2(4)
+
+com aic = %nobs*%logdet+2*%nregsystem
+com sbc = %nobs*%logdet+%nregsystem*log(%nobs)
+dis 'aic=' aic
+dis 'sbc=' sbc
+
+
+
+
+
+
+
+
+

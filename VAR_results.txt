@@ -1,0 +1,311 @@
+
+*
+* BOOTVAR.RPF
+* RATS Version 8
+* Bootstrapping example for VAR
+*
+compute lags=6				;*Number of lags
+compute nvar=5				;*Number of variables
+compute nstep=24			;*Number of response steps
+compute ndraws=3000			;*Number of draws
+*
+
+dec rect lr(5,5) sr(5,5)
+  input lr
+   . . . . .
+   . . . . .
+   0 . . . .
+   . 0 . . .
+   . . . . .
+
+
+   input sr
+   . 0 . 0 0
+   . . . . 0
+   . 0 . 0 0
+   . . . . 0
+   . . . . .
+
+
+
+cal(m) 1957 1 1
+*cal(m) 1968 1 5
+all 2011:03
+open data
+data(format=xls,org=obs)
+
+set ip_us = 100*(log(UNITED_STATES) - log(UNITED_STATES{1}))
+set ip_jp = 100*(log(JAPAN) - log(JAPAN{1}))
+set ip_k = 100*(log(korea) - log(korea{1}))
+*set ip_sp = 100*(log(S_P_500) - log(S_P_500{1}))
+*set ip_uk = 100*(log(UNITED_KINGDOM) - log(UNITED_KINGDOM{1}))
+*set ip_c = 100*(log(canada) - log(canada{1}))
+
+tab
+
+*garch(noprint,p=1,q=1,resids=resids1,hseries=ht,method=bfgs,iters=500) / ip_sp
+*set std_resids1 = resids1(t)/sqrt(ht(t))
+*cor(noprint,qstats,span=12,number=48) std_resids1
+*set spvar = sqrt(ht)
+*set spread = Baa - treas
+*set uncert = spread
+*set uncert = spvar
+
+*graph 1 ; # spread
+*@bjident spread
+*@uradf spread
+
+
+*box(ar=1,ma=1,constant) spread / resids
+*compute aic = %nobs*log(%rss) + 2*(%nreg)
+*compute sbc = %nobs*log(%rss) + (%nreg)*log(%nobs)
+*display 'aic = ' aic 'bic = ' sbc
+*@bic
+*@bjident resids
+
+
+******************************************************************
+*
+* Set up the system
+*
+dec vect[series] udraws(nvar) resids(nvar) resample(nvar)
+dec vect[equation] eqsample(nvar) eqbase(nvar)
+*
+system(model=varmodel)
+variables us_spread japan_spread ip_us ip_jp ip_k
+lags 1 to lags
+det constant
+end(system)
+*
+estimate(resids=resids,outsigma=s) 1965:06 *
+*estimate(resids=resids,outsigma=s) 1970:01 *
+@ShortAndLong(lr=lr,sr=sr,masum=inv(%varlagsums),factor=f) s
+impulse(noprint,model=varmodel,decomp=f,results=impulses,steps=nstep)
+
+
+compute rstart=%regstart(),rend=%regend()
+
+* Set up the parallel system for the resampled data
+*
+system(model=bootvar)
+variables resample
+lags 1 to lags
+det constant
+end(system)
+
+
+
+do i=1,nvar
+   set resample(i) = %modeldepvars(varmodel)(i){0}
+end do i
+declare vect[rect] %%responses(ndraws)
+declare rect[series] impulses(nvar,nvar)
+*
+
+infobox(action=define,progress,lower=1,upper=ndraws) "Bootstrap Simulations"
+do draw=1,ndraws
+   *
+   * Draw a bootstrapped sample
+   *
+   boot entries rstart rend
+   do i=1,nvar
+      set udraws(i) = resids(i)(entries(t))
+   end do i
+   forecast(paths,model=varmodel,from=rstart,to=rend,results=resample)
+   # udraws
+   *
+   * Estimate the model with resampled data
+   *
+   estimate(noprint,noftests) rstart rend
+@ShortAndLong(lr=lr,sr=sr,masum=inv(%varlagsums),factor=f) s
+impulse(noprint,model=varmodel,decomp=f,results=impulses,steps=nstep)
+
+
+set impulses(1,1) = impulses(1,1)/%sigma(1,1)**0.5
+set impulses(1,2) = impulses(1,2)/%sigma(1,1)**0.5
+set impulses(1,3) = impulses(1,3)/%sigma(1,1)**0.5
+set impulses(1,4) = impulses(1,4)/%sigma(1,1)**0.5
+set impulses(1,5) = impulses(1,5)/%sigma(1,1)**0.5
+
+
+set impulses(2,1) = impulses(2,1)/%sigma(2,2)**0.5
+set impulses(2,2) = impulses(2,2)/%sigma(2,2)**0.5
+set impulses(2,3) = impulses(2,3)/%sigma(2,2)**0.5
+set impulses(2,4) = impulses(2,4)/%sigma(2,2)**0.5
+set impulses(2,5) = impulses(2,5)/%sigma(2,2)**0.5
+
+
+set impulses(3,1) = impulses(3,1)/%sigma(3,3)**0.5
+set impulses(3,2) = impulses(3,2)/%sigma(3,3)**0.5
+set impulses(3,3) = impulses(3,3)/%sigma(3,3)**0.5
+set impulses(3,4) = impulses(3,4)/%sigma(3,3)**0.5
+set impulses(3,5) = impulses(3,5)/%sigma(3,3)**0.5
+
+
+set impulses(4,1) = impulses(4,1)/%sigma(4,4)**0.5
+set impulses(4,2) = impulses(4,2)/%sigma(4,4)**0.5
+set impulses(4,3) = impulses(4,3)/%sigma(4,4)**0.5
+set impulses(4,4) = impulses(4,4)/%sigma(4,4)**0.5
+set impulses(4,5) = impulses(4,5)/%sigma(4,4)**0.5
+
+
+set impulses(5,1) = impulses(5,1)/%sigma(5,5)**0.5
+set impulses(5,2) = impulses(5,2)/%sigma(5,5)**0.5
+set impulses(5,3) = impulses(5,3)/%sigma(5,5)**0.5
+set impulses(5,4) = impulses(5,4)/%sigma(5,5)**0.5
+set impulses(5,5) = impulses(5,5)/%sigma(5,5)**0.5
+
+
+
+
+
+
+   * Store the impulse responses
+   *
+   dim %%responses(draw)(nvar*nvar,nstep)
+   ewise %%responses(draw)(i,j)=ix=%vec(%xt(impulses,j)),ix(i)
+   infobox(current=draw)
+end do draw
+infobox(action=remove)
+*
+
+
+@MCGraphIRF1(model=varmodel,page=byshock,stdev=2)
+
+
+****Choleski decomposition
+* BOOTVAR.RPF
+* RATS Version 8
+* Bootstrapping example for VAR
+*
+compute lags=6				;*Number of lags
+compute nvar=5				;*Number of variables
+compute nstep=24			;*Number of response steps
+compute ndraws=3000			;*Number of draws
+
+*
+set ip_us = 100*(log(UNITED_STATES) - log(UNITED_STATES{1}))
+set ip_jp = 100*(log(JAPAN) - log(JAPAN{1}))
+set ip_k = 100*(log(korea) - log(korea{1}))
+set uncert = baa - treas
+*set uncert = spvar
+
+tab
+******************************************************************
+*
+* Set up the system
+*
+dec vect[series] udraws(nvar) resids(nvar) resample(nvar)
+dec vect[equation] eqsample(nvar) eqbase(nvar)
+*
+system(model=varmodel)
+variables us_spread japan_spread ip_us ip_jp ip_k
+*variables ip_us uncert ip_jp japan_spread ip_k korea_spread
+*variables uncert ip_us japan_spread ip_jp korea_spread ip_k
+
+
+lags 1 to lags
+det constant
+end(system)
+*
+estimate(resids=resids,outsigma=s) 1982:02 *
+compute rstart=%regstart(),rend=%regend()
+dis rstart rend
+* Set up the parallel system for the resampled data
+*
+system(model=bootvar)
+variables resample
+lags 1 to lags
+det constant
+end(system)
+
+do i=1,nvar
+   set resample(i) = %modeldepvars(varmodel)(i){0}
+end do i
+print / resample
+declare vect[rect] %%responses(ndraws)
+declare rect[series] impulses(nvar,nvar)
+*
+infobox(action=define,progress,lower=1,upper=ndraws) "Bootstrap Simulations"
+do draw=1,ndraws
+   *
+   * Draw a bootstrapped sample
+   *
+   boot entries rstart rend
+   do i=1,nvar
+      set udraws(i) = resids(i)(entries(t))
+   end do i
+   forecast(paths,model=varmodel,from=rstart,to=rend,results=resample)
+   # udraws
+   *
+   * Estimate the model with resampled data
+   *
+   estimate(noprint,noftests) rstart rend
+   impulse(noprint,model=bootvar,results=impulses,steps=nstep)
+   *
+   * Store the impulse responses
+   *
+   dim %%responses(draw)(nvar*nvar,nstep)
+   ewise %%responses(draw)(i,j)=ix=%vec(%xt(impulses,j)),ix(i)
+   infobox(current=draw)
+end do draw
+infobox(action=remove)
+*
+@MCGraphIRF1(model=varmodel,page=byshock,stdev=2)
+
+
+*************************South Korea Business Cycle Dates*********************
+history(model=varmodel,add,results=history,window='Shistory 1974-75',decomp=f,from=1974:2,to=1975:6)
+history(model=varmodel,add,results=history1,window='history 1979-1980',decomp=f) 1979:2 1980:9
+history(model=varmodel,add,results=history1,window='history 1984-1985',decomp=f) 1984:2 1985:9
+history(model=varmodel,add,results=history1,window='history 1988-1989',decomp=f) 1988:1 1989:7
+history(model=varmodel,add,results=history1,window='history 1992-1993',decomp=f) 1992:1 1993:1
+history(model=varmodel,add,results=history1,window='history 1996-1998',decomp=f) 1996:3 1998:8
+history(model=varmodel,add,results=history1,window='history 2000-2001',decomp=f) 2000:8 2001:7
+history(model=varmodel,add,results=history1,window='history 2002-2005',decomp=f) 2002:12 2005:4
+history(model=varmodel,add,results=history1,window='history 2008-2009',decomp=f) 2008:1 2009:2
+
+
+*************************Japanes Business Cycle Dates*********************
+history(model=varmodel,add,results=history,window='Shistory 1970-71',decomp=gg) 1970:7 1971:12
+history(model=varmodel,add,results=history1,window='history 1973-1975',decomp=gg) 1973:11 1975:3
+history(model=varmodel,add,results=history1,window='history 1977-1977',decomp=gg) 1977:1 1977:10
+history(model=varmodel,add,results=history1,window='history 1980-1983',decomp=gg) 1980:2 1983:2
+history(model=varmodel,add,results=history1,window='history 1985-1986',decomp=gg) 1985:6 1986:11
+history(model=varmodel,add,results=history1,window='history 1991-1993',decomp=gg) 1991:2 1993:10
+history(model=varmodel,add,results=history1,window='history 1997-1999',decomp=gg) 1997:5 1999:1
+history(model=varmodel,add,results=history1,window='history 2000-2002',decomp=gg) 2000:11 2002:1
+history(model=varmodel,add,results=history1,window='history 2007',decomp=gg) 2007:10 *
+
+
+*************************US Business Cycle Dates*********************
+history(model=varmodel,add,results=history,window='Shistory 1974-75',decomp=gg) 1970:7 1971:12
+history(model=varmodel,add,results=history1,window='history 1979-1980',decomp=gg) 1969:12 1970:11
+history(model=varmodel,add,results=history1,window='history 1984-1985',decomp=gg) 1973:11 1975:3
+history(model=varmodel,add,results=history1,window='history 1988-1989',decomp=gg) 1980:1 1980:7
+history(model=varmodel,add,results=history1,window='history 1992-1993',decomp=gg) 1981:7 1982:11
+history(model=varmodel,add,results=history1,window='history 1996-1998',decomp=gg) 1990:7 1991:3
+history(model=varmodel,add,results=history1,window='history 2000-2001',decomp=gg) 2001:3 2001:11
+history(model=varmodel,add,results=history1,window='history 2002-2005',decomp=gg) 2007:12 2009:6
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
